@@ -1,7 +1,5 @@
 *.egg
 *.log
-keihan_analysis_py3_version1.py
-keihan_analysis_py3_version2.py
 log_regulars.py
 __init__.py
 idea/

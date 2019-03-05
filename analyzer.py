@@ -5,14 +5,16 @@ from datetime import datetime
 
 LOG_REGULAR_EXPRESSIONS = {
 
+    # TODO 完善其他项目log的正则匹配
+
     'fukuoka': {
 
         'sp': {
             'index_pattern': ['/'],
-            'pattern': '(?P<remote_addr>[\d\.]{7,})\s(?P<identity>[\w.-]+)\s(?P<user_id>[\w.-]|"+|[\w]+)\s(?:\[(?P<datetime>[^\[\]]+)\])\s"(?P<request>[^"]+)"\s(?P<status>\d+)\s(?P<size>\d+|-)\s"(?:[^"]+)"\s"(?P<user_agent>[^"]+)"',
-            'route_patterns': ['m_search', 'mobilet'],
-            'diagram_patterns': ['m_eki_diagram'],
-            'fare_patterns': ['fare']
+            'pattern': '(?P<remote_addr>[\d\.]{7,})\s-\s-\s(?:\[(?P<datetime>[^\[\]]+)\])\s"(?P<request>[^"]+)"\s(?P<status>\d+)\s(?P<size>\d+)\s"(?:[^"]+)"\s"(?P<user_agent>[^"]+)"',
+            'route_patterns': ['/schedule/m_search', '/schedule/m_search_detail', '/mobilet'],
+            'diagram_patterns': ['/schedule/m_eki_diagram_k', '/schedule/m_eki_diagram_n'],
+            'fare_patterns': ['/fare/fare_index']
         },
 
         'pc': {
@@ -38,30 +40,32 @@ JAPANESE_WEEKDAY_NAMES = {
 
 ALLOWED_SERVER_NAMES = ['fukuoka', 'zentanbus']
 
-ALLOWED_SERVER_TYPES = ['pc', 'sp']
+ALLOWED_SERVER_TYPES = ['pc', 'sp']  # 传统机暂时使用sp来表示
 
 
 class LogAnalyzer:
 
     """
     使用参数说明：
-        month: 要进行统计的月份
-        server_name: 项目名称，如fukuoka
-        server_type: 服务器类型，sp/pc
-        unusual: 异常记录输出的文件路径
+        month: 要进行统计的月份，默认为当前月份-1，int类型
+        server_name: 必须参数 -- 项目名称，默认为fukuoka。合法项目名在ALLOWED_SERVER_NAMES列表中
+        server_type: 必须参数 -- 服务器类型，sp/pc  ==> 传统机/pc机
+        output_dir: 程序输出的文件路径，包括结果json和异常日志,默认是和程序在同层目录
+        collect_invalid: 是否输出非有效的记录。默认False
     """
 
     def __init__(self, logfile_path, month=datetime.today().month - 1, server_name='fukuoka', server_type='sp',
-                 unusual='./output/unusual.txt', *args, **kwargs):
+                 output_dir='./', collect_invalid = False, *args, **kwargs):
 
         super(self.__class__, self).__init__(*args, **kwargs)
         self.server_name = server_name
         self.server_type = server_type
         self.logfile_path = logfile_path  # 日志所在目录
+        self.collect_invalid = collect_invalid
         self.month = month  # 目标月份
         self.regulars = LOG_REGULAR_EXPRESSIONS.get(self.server_name).get(self.server_type)  # 获取正则表达式
         self.log_regx_obj = re.compile(self.regulars.get('pattern')) # 预编译正则
-        self.unusual = unusual  # 错误、警告等信息记录文件路径
+        self.output_dir = output_dir  # 错误、警告等信息记录文件路径
         self.container = {}  # 每日统计载体
         self.stat_body = {}  # 最终结果载体
         self.check_args()
@@ -97,16 +101,11 @@ class LogAnalyzer:
 
         effective_count = route_count = diagram_count = fare_count = 0
 
-        # for pattern in self.regulars.get('index_pattern'):
-        #     if re.search(pattern, url):
-        #         effective_count = 1
-        #         break
-        #
-        # if url == '/':
-        #     effective_count = 1
-
         if url in self.regulars.get('index_pattern'):
             effective_count = 1
+
+        # if url == '/':
+        #     effective_count = 1
 
         for route_pattern in self.regulars.get('route_patterns'):
             route_search_result = re.search(route_pattern, url)
@@ -128,12 +127,11 @@ class LogAnalyzer:
 
         return effective_count, route_count, diagram_count, fare_count
 
-    def parse_group(self, log_record, file):
+    def parse_group(self, log_record):
         try:
             result = self.log_regx_obj.search(log_record)
             return result
         except AttributeError:
-            self.get_unusual(file, log_record)
             return None
 
     def store_into_container(self, date_time, request):
@@ -207,9 +205,11 @@ class LogAnalyzer:
         self.stat_body['weekday_stat'] = weekday_stat
         self.stat_body['daily_stat'] = daily
 
-        json_file = './output/{}-{}-{}.json'.format(
-            self.server_name, self.server_type, datetime.today().strftime('%Y%m%d')
+        json_file_name = '{}-{}-{}.json'.format(
+            self.server_name, self.server_type, self.month
         )
+
+        json_file = os.path.join(self.output_dir, json_file_name)
         # 若目标名文件已存在，先删除
         if os.path.exists(json_file):
             os.remove(json_file)
@@ -218,11 +218,25 @@ class LogAnalyzer:
         json.dump(self.stat_body, json_file_obj, ensure_ascii=False)
 
     def get_unusual(self, file_name, log_record):
-        unusual = open(self.unusual, 'a', encoding='utf-8')
+        """记录异常日志"""
+        unusual_out_put_path = os.path.join(self.output_dir, 'unusual.txt')
+        unusual = open(unusual_out_put_path, 'a', encoding='utf-8')
         path = os.path.abspath(file_name).replace('\\', '/')
         unusual.write('{}\n{}\n'.format(path, log_record))
         unusual.flush()
         unusual.close()
+
+    def get_invalid(self, file_name, log_record):
+        """纪录无效日志"""
+        if self.collect_invalid:
+            invalid_out_put_path = os.path.join(self.output_dir, 'invalid.txt')
+            invalid = open(invalid_out_put_path, 'a', encoding='utf-8')
+            path = os.path.abspath(file_name).replace('\\', '/')
+            invalid.write('{}\n{}\n'.format(path, log_record))
+            invalid.flush()
+            invalid.close()
+        else:
+            pass
 
     def analyzer(self):
 
@@ -240,19 +254,25 @@ class LogAnalyzer:
                     if not log_record:
                         break
 
-                    # 正则的分组解析。没有解析出正确组件的，记录到日志中
-                    result = self.parse_group(log_record, file)
+                    # 正则的分组解析
+                    result = self.parse_group(log_record)
 
+                    # 跳过没有正确解析出组件的的记录并记录之(若开启记录功能)
                     if not result:
-                        self.get_unusual(file, log_record)
+                        self.get_invalid(file, log_record)
                         continue
 
-                    # 当月数不符合条件或者压根没有日期信息时，跳过该条记录
+                    # 跳过状态码不是200的记录
+                    if not int(result.group('status')) == 200:
+                        continue
+
+                    # 跳过无日期或者非指定月份的记录
                     is_current_month, date_time = self.check_date(result)
                     if not (is_current_month and date_time):
                         continue
 
-                    # 处理request组件，进行信息存储。记录并跳过没有找到request组件的log记录
+                    # 处理request部分
+                    # 跳过没有找到request组件的log记录
                     try:
                         request = result.group('request')
                     except AttributeError:
@@ -266,11 +286,14 @@ class LogAnalyzer:
 
 
 if __name__ == '__main__':
+
+    # 请根据LogAnalyzer参数说明进行实例化！
     log_analyzer = LogAnalyzer(
         logfile_path='./logs/fukuoka_1902',  # 日志目录
         month=2,  # 目标月份
         server_name='fukuoka',  # 项目名
-        server_type='sp',  # 主机类型
-        unusual='./output/unusual_records.txt'  # 异常输出
+        server_type='sp',  # 主机类型。sp表示传统机
+        output_dir='./output',  # 结果输出文件夹
+        collect_invalid = False  # 是否输出非有效访问的log记录
     )
     log_analyzer.analyzer()
